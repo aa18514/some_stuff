@@ -4,6 +4,7 @@ import caffe_pb2
 import numpy as np 
 import datetime
 import conv
+import struct
 from google.protobuf import text_format
 import tensorflow
 
@@ -36,20 +37,22 @@ def tf_conv_cpu(matrix_1, conv, pool, data, conv_1_weights, conv_2_weights, conv
     init = tf.global_variables_initializer()
     sess = tf.Session()
     inputChannels = [data.input_param.shape[0].dim[1], conv[0].convolution_param.num_output]
-    A = tf.nn.conv2d(matrix_1.reshape(10000, 28, 28, 1), filter = weights.reshape(5, 5, 1, 20), strides = [1, 1, 1, 1], padding = "VALID") 
+    A = tf.nn.conv2d(matrix_1.reshape(10000, 28, 28, 1), filter = conv_1_weights, strides = [1, 1, 1, 1], padding = "VALID") 
     B = tf.nn.max_pool(A, [1, 2, 2, 1], [1, 2, 2, 1],  padding = "SAME") + conv1_bias
-    C = tf.nn.conv2d(B, filter = weights2.reshape(5, 5, 20, 50), strides = [1, 1, 1, 1],  padding = "VALID")
+    C = tf.nn.conv2d(B, filter = conv_2_weights, strides = [1, 1, 1, 1],  padding = "VALID")
     relu = tf.nn.max_pool(C, [1, 2, 2, 1], [1, 2, 2, 1], padding = "SAME")
     a = sess.run(relu)
     b = a.transpose().transpose((3, 0, 2, 1)) + conv2_bias.reshape(1, 50, 1, 1)
-    Z = tf.matmul(ip1_weights.reshape(500, 800), b.reshape(10000, 800).T) + ip1_bias.reshape(500, 1)
+    Z = tf.matmul(ip1_weights.reshape(500, 800), b.reshape(10000, 800).T)
     Y = tf.matmul(ip2_weights.reshape(10, 500), tf.nn.relu(Z)) + ip2_bias.reshape(10, 1)
-    relu = sess.run(Y)
+    relu = sess.run(tf.nn.softmax(Y, dim = 0))
     sess.close()
     FinalTime = datetime.datetime.now()
+    relu[relu < 0.5] = 0
+    relu[relu >= 0.5] = 1
+    relu = relu.T
     print("tensorflow took: %fs" % (10000 * ((40 * 24 * 24 * 5 * 5) + (24 * 24 * 20) + (20 * 12 * 12 * 4) +  (2 * 12 * 12 * 5 * 5 * 20 * 50) + (50 * 20 * 12 * 12) + (50 * 12 * 12) + (50 * 8 * 8 * 4) +  (500 * 4 * 800) + (10 * 500 * 2))/(FinalTime - StartTime).total_seconds()))
     print((FinalTime - StartTime).total_seconds())
-    print(relu)
     return relu
 
 def numpy_conv(net, matrix_1): 
@@ -85,52 +88,40 @@ def numpy_conv(net, matrix_1):
     print(fc2o)
 
 if __name__ == "__main__":
-    lenet = caffe_pb2.NetParameter()
-    text_format.Merge(open("lenet.prototxt").read(), lenet)
-    lenet.MergeFromString(open("lenet_iter_10000.caffemodel", "rb").read())
-    conv = []
-    pool = []
-    data = None
-    layers = lenet.layer
-    for layer in layers: 
-        if(layer.type == "Input"):
-            data = layer
-        if(layer.type == "Convolution"): 
-            conv.append(layer)
-        elif(layer.type == "Pooling"): 
-            pool.append(layer)
-    hf = h5py.File('conv.h5', 'r')
-    n1 = hf.get('conv1_weights')
-    n2 = hf.get('conv2_weights')
-    conv1_weights = np.array(n1).transpose((2, 3, 1, 0))
-    conv2_weights = np.array(n2).transpose((2, 3, 1, 0))
-    conv1_bias = np.array(hf.get('conv1_biases'))
-    conv2_bias = np.array(hf.get('conv2_biases'))
-    hf.close()
-    hf = h5py.File('fc.h5', 'r')
-    fc1_weights = np.array(hf.get('fc1_weights'))
-    fc1_bias = np.array(hf.get('fc1_biases'))
-    fc2_weights = np.array(hf.get('fc2_weights'))
-    fc2_bias = np.array(hf.get('fc2_biases'))
-    #net = caffe.Net("lenet.prototxt","lenet_iter_10000.caffemodel", caffe.TEST) 
-    matrix_1 = np.random.randint( 0, 256, (10000, 28, 28))
-    matrix_1 = np.array(matrix_1, np.float32)
-    print(matrix_1.shape)
-    tf_conv_cpu( matrix_1, conv, pool, data, conv1_weights, conv2_weights, conv1_bias, conv2_bias, fc1_weights, fc2_weights, fc1_bias, fc2_bias)
-    print("HELLO")
-    print(matrix_1[0][0].shape)
-    matrix_2 = matrix_1[1]
-    matrix_2 = matrix_2[np.newaxis,np.newaxis,:,:]
-    net.blobs['data'].reshape(*matrix_2.shape)
-    net.blobs['data'].data[...] = matrix_2
-    net.forward()
-    print(net.blobs['ip2'].data.flatten())
-    layers = lenet.layer
-    for layer in layers:
-        print(layer.type)
-        if(layer.type == "Convolution"):
-            kernel = layer.convolution_param.kernel_size[0]
-            stride = layer.convolution_param.stride[0]
-            print(kernel)
-       
-    print(layer.convolution_param.num_output)
+	lenet = caffe_pb2.NetParameter()
+	text_format.Merge(open("lenet.prototxt").read(), lenet)
+	lenet.MergeFromString(open("lenet_iter_10000.caffemodel", "rb").read())
+	conv = []
+	pool = []
+	data = None
+	layers = lenet.layer
+	for layer in layers: 
+		if(layer.type == "Input"):
+			data = layer
+		if(layer.type == "Convolution"): 
+			conv.append(layer)
+		elif(layer.type == "Pooling"): 
+			pool.append(layer)
+	hf = h5py.File('conv.h5', 'r')
+	n1 = hf.get('conv1_weights')
+	n2 = hf.get('conv2_weights')	
+	conv1_weights = np.array(n1).transpose((2, 3, 1, 0))
+	conv2_weights = np.array(n2).transpose((2, 3, 1, 0))
+	conv1_bias = np.array(hf.get('conv1_biases'))
+	conv2_bias = np.array(hf.get('conv2_biases'))
+	hf.close()
+	hf = h5py.File('fc.h5', 'r')
+	fc1_weights = np.array(hf.get('fc1_weights'))
+	fc1_bias = np.array(hf.get('fc1_biases'))
+	fc2_weights = np.array(hf.get('fc2_weights'))
+	fc2_bias = np.array(hf.get('fc2_biases'))
+	with open("t10k-images-idx3-ubyte", 'rb') as f: 
+		magic, num, rows, cols = struct.unpack(">IIII", f.read(16))
+		image = np.fromfile(f, dtype = np.uint8).reshape(num, rows, cols);
+	with open("t10k-labels-idx1-ubyte", 'rb') as f: 
+		magic_nr, size = struct.unpack(">II", f.read(8))
+		lbl = np.fromfile(f, dtype=np.int8)
+
+	print(len(lbl))
+	predicted_labels = tf_conv_cpu(np.array(image, dtype = np.float32), conv, pool, data, conv1_weights.reshape(5, 5, 1, 20), conv2_weights.reshape(5, 5, 20, 50), conv1_bias, conv2_bias, fc1_weights, fc2_weights, fc1_bias, fc2_bias)
+	print(np.sum(np.nonzero(predicted_labels)[1] != lbl)/100)
