@@ -1,0 +1,6 @@
+import caffe
+import h5py
+
+if __name__ == "__main__":
+ 
+	hf = h5py.File(
